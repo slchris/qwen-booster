@@ -535,6 +535,27 @@ PYTHONPATH=src .cache/vlm-env/bin/python -m qwen_booster.vlm_server \
 
 **架构建议**：内网网关（认证、限流、审计、排队）→ `vlm_server --host <内网地址> --api-key <token> --max-num-seqs 2–4`（OpenAI/Anthropic 任选）；交互 chat 用 Flash（更快 prefill 与 decode），27B 更慢但质量证据更好，适合异步/批处理任务。**Flash 峰值约 105GB、27B 约 85GB，128GB 单机无法同时常驻，一台一模型或按需切换**。长文档诊断不要把 200K 冷 prefill 当交互（Flash 也要 9–10 分钟）：用检索/截断策略、会话钉住和共享前缀预热；长会话并发时按 context 预算下调 `max-num-seqs`。项目自研的单行缓存优化（borrow/credit/recheck）在批处理路径不生效，并发下走上游 APC，尚未做并发命中验收。观测先沿用 `/metrics` + JSONL + `render_report.py`；用户变多后再考虑在独立机器自托管 Langfuse/OTel，理由见上节。
 
+## 长上下文解码加速实测（2026-10-08）
+
+目标：在当前硬件（M3 Max 128GB）把 32K/100K/200K 实际使用下的 decode 做到约 30 tokens/s。用同一份合成运维文档、greedy 128-token 输出、APC 预热后测量（[完整证据与日志](benchmarks/long-context-decode-scaling-v1/manifest.json)）：
+
+| 配置（32K/100K/200K 热态 decode tokens/s） | 32K | 100K | 200K | 备注 |
+| --- | ---: | ---: | ---: | --- |
+| Flash-Next 基线 | **24.0** | **19.2** | 12.5–13.4* | *200K 两次热请求 cached=0，为全量重算后的 decode；prefill 78/160/282 秒 |
+| Flash-Next + MTP block 3 | 25.3（22.9/27.6） | — | — | 同负载无实质收益，仍按负载复测 |
+| 27B 4-bit 基线 | 7.9 | — | — | 热命中 32779 tokens |
+| 27B 4-bit + z-lab DFlash2 | **14.0（1.77×）** | — | — | 草稿接受 74/107=69%，2.37 tokens/轮，greedy 输出逐 token 一致 |
+| Flash-Next + `--kv-bits 4` | 不支持 | — | — | 上游拒绝：QSA 缓存不支持量化连续批处理 |
+
+结论与路线：
+
+1. **30 tok/s 单流目标**：当前上游软件下只有 ~32K 上下文最接近（24–25）；100K 为 19，200K 约 13。要把 100K/200K 做到 30 需要内核/编译级优化，现成开关里没有；不要把短上下文收益外推到长上下文。
+2. **DFlash2 证明外部高接受率草稿是有效杠杆**（27B +77%，且输出无损），但 27B 绝对值仍低于 Flash；若出现 Flash-Next 版 DFlash/EAGLE 草稿，值得优先测试。
+3. **KV 量化对 Flash 被封死**（上游 QSA×连续批处理限制）；27B 的 KV 量化未测，理论上是长上下文 decode 的候选。
+4. **200K 交互仍不可用**：纯上游与 borrow+credit 组合都未能热命中（cached=0，TTFT ~505 秒），且补丁组合下 prime 反而从 282 秒升到 570 秒；需要磁盘回退（RAM 保存被拒后同步落盘、下次恢复约 15 秒）或继续修准入。**建议交互上下文控制在 ≤32K（检索/分块），200K 走磁盘回退 + 会话钉住**。
+5. **并发**：连续批处理把 4 路聚合推到约 40 tokens/s（单路 15）；总吞吐够一个小团队，但单路 30 需要上面的单流优化。
+6. 已落地的开关：`vlm_server --draft-kind dflash|eagle3|mtp`（dflash 使用草稿自带 block 配置）、`--kv-bits/--kv-quant-scheme/--quantized-kv-start`；默认全部关闭。基准脚本 `scripts/benchmark_decode_contexts.py` 可复现本表。
+
 ## 参考
 
 - [Strata](https://github.com/Niko1221/Strata)：分阶段优化、状态复用、推测解码和数值回归的方法。
