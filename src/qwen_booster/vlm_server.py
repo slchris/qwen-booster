@@ -22,6 +22,19 @@ def disk_cache_environment(directory, budget_mb, memory_cache_mb):
             'APC_DISK_MAX_GB': str(budget_mb * 1_000_000 / (1 << 30))}
 
 
+def server_argv(path, args):
+    """Translate launcher options into the pinned backend's CLI."""
+    argv = ["mlx_vlm.server", "--model", str(path), "--host", args.host,
+            "--port", str(args.port), "--max-num-seqs", str(args.max_num_seqs),
+            "--max-kv-size", str(args.context), "--prefill-step-size", "2048"]
+    if args.api_key:
+        argv.extend(["--api-key", args.api_key])
+    if args.draft:
+        argv.extend(["--draft-model", str(Path(args.draft).resolve()),
+                     "--draft-kind", "mtp", "--draft-block-size", str(args.block)])
+    return argv
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", required=True)
@@ -30,6 +43,12 @@ def main():
                         help="Experimental 27B fused full-attention prefill; defaults off")
     parser.add_argument("--block", type=int, default=3)
     parser.add_argument("--port", type=int, default=18081)
+    parser.add_argument("--host", default="127.0.0.1",
+                        help="Bind address; keep localhost unless serving the intranet")
+    parser.add_argument("--max-num-seqs", type=int, default=1,
+                        help="Concurrent sequences in the continuous batch; extras queue with backpressure")
+    parser.add_argument("--api-key",
+                        help="Optional bearer token required by inference and management endpoints")
     parser.add_argument("--context", type=int, default=32768)
     parser.add_argument("--memory-mb", type=int, default=64000)
     parser.add_argument("--allocator-cache-mb", type=int, default=2000)
@@ -72,10 +91,11 @@ def main():
         disk_environment = disk_cache_environment(args.disk_cache_dir, args.disk_cache_mb, args.cache_mb)
     except ValueError as error:
         parser.error(str(error))
-    if (not 1 <= args.port <= 65535 or args.block < 2
+    if (not 1 <= args.port <= 65535 or args.block < 2 or args.max_num_seqs < 1
+            or not args.host or args.api_key == ""
             or min(args.memory_mb, args.allocator_cache_mb) <= 0 or args.cache_mb < 0
             or not math.isfinite(args.token_timeout) or args.token_timeout <= 0):
-        parser.error("invalid port, block size, memory budget or token timeout")
+        parser.error("invalid port, host, sequence cap, block size, memory budget or token timeout")
     from .models import resolve_local_model
     from .context import ContextBudget
 
@@ -175,12 +195,7 @@ def main():
             logging.getLogger(__name__).info("Expanded prefill weights: %s", report)
 
         ResponseGenerator._initialize_model = initialize_with_expanded_prefill
-    sys.argv = ["mlx_vlm.server", "--model", str(path), "--host", "127.0.0.1",
-                "--port", str(args.port), "--max-num-seqs", "1",
-                "--max-kv-size", str(args.context), "--prefill-step-size", "2048"]
-    if args.draft:
-        sys.argv.extend(["--draft-model", str(Path(args.draft).resolve()),
-                         "--draft-kind", "mtp", "--draft-block-size", str(args.block)])
+    sys.argv = server_argv(path, args)
     serve()
 
 
