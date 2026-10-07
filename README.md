@@ -514,7 +514,26 @@ PYTHONPATH=src .cache/vlm-env/bin/python -m qwen_booster.vlm_server \
 - **混合缓存真机验证已完成有界检查**：M3 Max 128GB、Qwen3.8-27B MLX 4-bit 快照 `10c35caa…`、8193-token 合成提示、greedy 8 tokens。冷 prefill 39.1 秒；同提示热命中边界 8192、prepare 0.001 秒、输出逐 token 一致；仅末 token 变化和追加 8 token 的提示同样命中 8192；无复用冷对照输出一致；同进程磁盘恢复 0.006 秒、新进程恢复 0.004 秒，输出一致。HTTP 端到端（6020 tokens）：冷请求 27.5 秒、热请求命中 5888 并重放 132 tokens、总 prepare 0.83 秒、正文一致。归档见 [hybrid-cache-native-v1](benchmarks/hybrid-cache-native-v1/manifest.json)。这只验证缓存机制，**不是吞吐、质量或日常使用验收**，也没有覆盖 200K 档位。
 - **观测与结果查看（Langfuse 评估）**：本项目为本地优先、单请求实验服务，验收依赖逐字节 JSONL/manifest 与冷/热对照；而 Langfuse v4 自托管需要 Web+Worker、PostgreSQL、Redis、ClickHouse、S3 五件套，云端版会把提示与回答传出本机，且它不采集 MLX 峰值内存、缓存准入、块命中这类决定验收的字段。因此**暂不引入 Langfuse**。替代方案是新增零依赖离线报告器 `scripts/render_report.py <results.jsonl> --output report.html`，把测量 JSONL 渲染成带数值条的静态 HTML；原始 JSONL 仍是唯一事实来源。若后续服务变为多用户/多并发，再考虑 OpenTelemetry（上游 mlx-vlm 目前没有 tracing 钩子）或自托管 Langfuse。
 - **开源测试集**：`grading.py` 新增 `choice`、`numeric`、`contains_all`、`contains_any`、`regex` 判定；`scripts/build_opensource_suite.py` 离线转换本地 RULER 风格 NIAH、LongBench、GSM8K、MMLU 导出为现有 suite 格式（`evaluate_api.py` 直接可用），不下载、不改写原始任务，未通过的数字字段会跳过并计数。**转换成功不等于质量验收**：开源集存在污染、模板与语言差异，长上下文档位仍需按本机 tokenizer 审计实际输入。
-- 新增测试总数：240（原 200 + 缓存与归档 28 + 评分、转换与报告 12）。
+- 新增测试总数：244（原 200 + 缓存与归档 28 + 评分、转换、报告与并发 16）。
+
+## 内网服务评估：chat + 并发 + 运维诊断 agent（2026-10-07）
+
+目标场景从"本机单请求实验"变为"内网多用户 chat / 运维诊断 agent"，因此对服务底座做了能力排查与真实并发测量。结论：**可行，但要改掉实验默认值，并接受专用硬件约束**。
+
+**能力现状（上游 pinned mlx-vlm 服务端）**：已内置连续批处理与背压（`--max-num-seqs`，映射 `MLX_VLM_MAX_NUM_SEQS`）、`--api-key`、`/health` 与 `/metrics`（Prometheus）、tools/function calling（本机加载 `qwen3_coder` 工具解析器）、结构化输出、OpenAI 与 Anthropic 兼容端点。此前项目启动器 `qwen_booster.vlm_server` 把它们硬编码关掉了（`--max-num-seqs 1`、绑定 `127.0.0.1`）；现已增加 `--max-num-seqs`、`--host`、`--api-key` 透传，默认仍是单序列 + localhost，按需开启。native mlx-lm 服务是单线程实验接口，不适合并发 chat。
+
+**Flash-Next 并发实测**（M3 Max 128GB，4-bit external-PLE，16K context，APC 关闭，112-token 中文诊断题，greedy 64 tokens，热态第二轮，服务端 `--max-num-seqs 4`）：
+
+| 并发 | 单路 decode tokens/s | 聚合 tokens/s | 首 token | 说明 |
+| ---: | ---: | ---: | ---: | --- |
+| 1 | 24.0 | 24.0 | 0.66s | 热态单路 |
+| 2 | 19.5–21.0 | 28.7 | 1.1–1.5s | |
+| 4 | 14.8–15.1 | 40.2 | ~2.0s | 批处理满编，聚合约为单路的 1.7 倍 |
+| 8 | 12.2–14.0 | 36.8 | 2.1s / 第二波 8.9s | 超过 cap 的请求排队，吞吐平台化 |
+
+同层内所有请求 greedy 文本完全一致（批处理不失真）；首个请求有约 25 秒冷启动/编译开销，服务启动后应先预热。**MTP 草稿（block 3）在本提示上反而更慢**：单路 14.0 tps、4 路每路 5.5 tps，尽管输出与基线逐 token 一致；这与项目早期其它短任务 1.3–1.8× 的证据冲突，说明 MTP 收益高度任务相关，**并发服务默认不要开**，按负载复测后再定。归档见 [flash-concurrency-v1](benchmarks/flash-concurrency-v1/manifest.json)，仅为单提示两轮的有界观测，不是容量规划。
+
+**架构建议**：内网网关（认证、限流、审计、排队）→ `vlm_server --host <内网地址> --api-key <token> --max-num-seqs 2–4`（OpenAI/Anthropic 任选）；交互 chat 用 Flash（更快 prefill 与 decode），27B 更慢但质量证据更好，适合异步/批处理任务。**Flash 峰值约 105GB、27B 约 85GB，128GB 单机无法同时常驻，一台一模型或按需切换**。长文档诊断不要把 200K 冷 prefill 当交互（Flash 也要 9–10 分钟）：用检索/截断策略、会话钉住和共享前缀预热；长会话并发时按 context 预算下调 `max-num-seqs`。项目自研的单行缓存优化（borrow/credit/recheck）在批处理路径不生效，并发下走上游 APC，尚未做并发命中验收。观测先沿用 `/metrics` + JSONL + `render_report.py`；用户变多后再考虑在独立机器自托管 Langfuse/OTel，理由见上节。
 
 ## 参考
 
