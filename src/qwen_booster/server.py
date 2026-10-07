@@ -48,7 +48,7 @@ def serve(args):
     import mlx.core as mx
     from mlx_lm import load, stream_generate
     from .cli import local_model, environment
-    from .runtime import Engine, stream_lookup
+    from .runtime import Engine, HybridEngine, stream_lookup
 
     from .context import ContextBudget
 
@@ -68,6 +68,14 @@ def serve(args):
                             if (path / name).is_file()})
     engine = Engine(model, prefill_step_size=args.step, cache_bytes=args.cache_mb * 1_000_000,
                     active_memory_budget=args.memory_mb * 1_000_000)
+    if getattr(args, "hybrid_cache", False):
+        engine = HybridEngine(model, prefill_step_size=args.step,
+                              cache_bytes=args.cache_mb * 1_000_000,
+                              active_memory_budget=args.memory_mb * 1_000_000,
+                              block_size=args.hybrid_block_size,
+                              disk_root=args.cache_disk_dir,
+                              disk_bytes=args.cache_disk_mb * 1_000_000,
+                              disk_entries=args.cache_disk_entries)
     engine.check_memory()
 
     class Handler(BaseHTTPRequestHandler):
@@ -88,7 +96,10 @@ def serve(args):
                     "context_limit": budget.service_limit, "native_context_limit": budget.native_limit,
                     "context_quality_validated": False, "environment": provenance,
                     "memory_budget_bytes": args.memory_mb * 1_000_000,
-                    "allocator_cache_budget_bytes": args.allocator_cache_mb * 1_000_000})
+                    "allocator_cache_budget_bytes": args.allocator_cache_mb * 1_000_000,
+                    "hybrid_cache": getattr(args, "hybrid_cache", False),
+                    "hybrid_block_size": getattr(args, "hybrid_block_size", None),
+                    "cache_disk_dir": getattr(args, "cache_disk_dir", None)})
             elif self.path == "/v1/cache/stats":
                 self.json_response(200, engine.prefixes.stats())
             else:
@@ -97,6 +108,8 @@ def serve(args):
         def do_POST(self):
             if self.path == "/v1/cache/reset":
                 engine.prefixes.clear()
+                if getattr(engine, "disk", None) is not None:
+                    engine.disk.clear()
                 mx.clear_cache()
                 self.json_response(200, engine.prefixes.stats())
                 return
@@ -226,7 +239,8 @@ def serve(args):
     server = HTTPServer(("127.0.0.1", args.port), Handler)
     server.timeout = 1
     print(f"Serving {MODEL_NAME} at http://127.0.0.1:{args.port}/v1 "
-          f"(one request at a time, lookup={args.lookup})", flush=True)
+          f"(one request at a time, lookup={args.lookup}, "
+          f"hybrid_cache={getattr(args, 'hybrid_cache', False)})", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

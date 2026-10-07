@@ -8,6 +8,8 @@ import copy
 from collections import OrderedDict
 from dataclasses import dataclass
 
+from .hybrid_cache import HybridPrefixCache, final_block_hash
+
 
 class PrefixStore:
     def __init__(self, max_bytes=2_000_000_000, max_entries=4):
@@ -76,16 +78,19 @@ class Engine:
             if mx.get_active_memory() > self.active_memory_budget:
                 raise MemoryError("MLX active memory exceeds configured budget")
 
+    def _fresh_cache(self):
+        from mlx_lm.models.cache import make_prompt_cache
+        return make_prompt_cache(self.model)
+
     def prepare(self, tokens, reuse=True):
         import mlx.core as mx
-        from mlx_lm.models.cache import make_prompt_cache
 
         if not tokens:
             raise ValueError("prompt must be nonempty")
         count, cache = self.prefixes.get(tokens) if reuse else (0, None)
         self.last_cached_tokens = count
         if cache is None:
-            cache = make_prompt_cache(self.model)
+            cache = self._fresh_cache()
         # Leave the last token for generation, so no logits need to be cached.
         end = len(tokens) - 1
         for start in range(count, end, self.prefill_step_size):
@@ -137,6 +142,101 @@ class Engine:
             return False
         mx.eval([c.state for c in cache])
         return self.prefixes.put(tokens, cache)
+
+
+class HybridEngine(Engine):
+    """Block-aligned checkpoint engine following vLLM hybrid-cache semantics.
+
+    Recurrent state is never trimmed: restores come from block-aligned
+    checkpoints and the engine replays at most one block plus the kept final
+    token. ``commit`` publishes a post-generation checkpoint only when the
+    finished length is itself block aligned; otherwise the next request
+    replays the unaligned tail from the newest boundary.
+    """
+
+    def __init__(self, model, prefill_step_size=2048, cache_bytes=2_000_000_000,
+                 active_memory_budget=None, block_size=256, disk_root=None,
+                 disk_bytes=0, disk_entries=64, disk_save=None, disk_load=None):
+        super().__init__(model, prefill_step_size=prefill_step_size,
+                         cache_bytes=cache_bytes,
+                         active_memory_budget=active_memory_budget)
+        if block_size <= 0:
+            raise ValueError("block_size must be positive")
+        if bool(disk_root) != (disk_bytes > 0):
+            raise ValueError("disk checkpointing requires disk_root and positive disk_bytes")
+        self.block_size = block_size
+        self.prefixes = HybridPrefixCache(max_bytes=cache_bytes, block_size=block_size)
+        self.disk = None
+        if disk_root:
+            from .apfs import CheckpointDiskStore
+            self.disk = CheckpointDiskStore(disk_root, disk_bytes,
+                                            max_entries=disk_entries,
+                                            save=disk_save, load=disk_load)
+
+    def _offsets_match(self, cache, count):
+        from mlx_lm.models.cache import KVCache
+        offsets = [c.offset for c in cache if isinstance(c, KVCache)]
+        return bool(offsets) and all(offset == count for offset in offsets)
+
+    def _lookup(self, tokens):
+        count, cache = self.prefixes.find(tokens)
+        if self.disk is not None:
+            disk_count, disk_cache = self.disk.find(tokens, self.block_size)
+            if disk_count > count:
+                count, cache = disk_count, disk_cache
+        if cache is not None and not self._offsets_match(cache, count):
+            return 0, None
+        return count, cache
+
+    def _store(self, tokens, cache):
+        size = sum(c.nbytes for c in cache)
+        stored = self.prefixes.store(tokens, cache)
+        if self.disk is not None:
+            self.disk.put(final_block_hash(tokens, self.block_size), len(tokens),
+                          cache, nbytes=size)
+        return stored
+
+    def prepare(self, tokens, reuse=True):
+        import mlx.core as mx
+
+        if not tokens:
+            raise ValueError("prompt must be nonempty")
+        count, cache = self._lookup(tokens) if reuse else (0, None)
+        self.last_cached_tokens = count
+        if cache is None:
+            cache = self._fresh_cache()
+        end = len(tokens) - 1
+        boundary = end - end % self.block_size
+        processed, stored = count, False
+        while processed < end:
+            stop = min(processed + self.prefill_step_size, end)
+            if reuse and not stored and count < boundary < stop:
+                stop = boundary
+            chunk = mx.array(tokens[processed:stop], dtype=mx.uint32)
+            self.model(chunk[None], cache=cache)
+            mx.eval([c.state for c in cache])
+            mx.clear_cache()
+            self.check_memory()
+            processed = stop
+            if reuse and not stored and boundary > count and processed == boundary:
+                self._store(tokens[:boundary], cache)
+                stored = True
+        return cache
+
+    def commit(self, tokens, cache):
+        """Publish only block-aligned finished prefixes; unaligned tails replay."""
+        import mlx.core as mx
+        from mlx_lm.models.cache import KVCache, ArraysCache
+
+        if not cache or len(tokens) % self.block_size:
+            return False
+        if any(not isinstance(c, (KVCache, ArraysCache)) for c in cache):
+            return False
+        offsets = [c.offset for c in cache if isinstance(c, KVCache)]
+        if not offsets or any(offset != len(tokens) for offset in offsets):
+            return False
+        mx.eval([c.state for c in cache])
+        return self._store(tokens, cache)
 
 
 @dataclass

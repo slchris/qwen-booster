@@ -190,6 +190,15 @@ def main():
     server.add_argument("--lookup", action="store_true", help="Opt in to experimental prompt lookup for copying workloads")
     server.add_argument("--expanded-prefill", action="store_true",
                         help="Experimental prefill-only MLP expansion; needs about 34 GB extra resident memory")
+    server.add_argument("--hybrid-cache", action="store_true",
+                        help="Experimental vLLM-style block-aligned checkpoints with bounded replay; defaults off")
+    server.add_argument("--hybrid-block-size", type=positive, default=256,
+                        help="Token block for aligned hybrid checkpoints (default: 256)")
+    server.add_argument("--cache-disk-dir",
+                        help="Experimental APFS-cloned checkpoint directory; requires --hybrid-cache")
+    server.add_argument("--cache-disk-mb", type=int, default=0,
+                        help="Disk checkpoint budget in decimal MB; 0 disables disk persistence")
+    server.add_argument("--cache-disk-entries", type=positive, default=64)
     bench = commands.add_parser("bench", help="Measure fresh-cache text prefill and decode")
     bench.add_argument("--model", help="Local snapshot directory; defaults to cached Qwen3.8-27B-4bit")
     bench.add_argument("--lengths", nargs="+", type=positive, default=[512, 2048, 8192, 32768])
@@ -205,6 +214,13 @@ def main():
     os.environ["MLX_GDN_PACKED"] = "1" if args.gdn_kernel == "native" else "0"
     if args.command == "bench" and args.tokens < 2:
         parser.error("--tokens must be >= 2 to measure decode")
+    if args.command == "serve":
+        if args.hybrid_block_size < 2:
+            parser.error("--hybrid-block-size must be >= 2")
+        if bool(args.cache_disk_dir) != (args.cache_disk_mb > 0):
+            parser.error("--cache-disk-dir and positive --cache-disk-mb are required together")
+        if args.cache_disk_dir and not args.hybrid_cache:
+            parser.error("--cache-disk-dir requires --hybrid-cache")
     try:
         if args.command == "verify-cache":
             from .validation import validate
