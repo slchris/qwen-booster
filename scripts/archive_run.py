@@ -28,12 +28,17 @@ def main():
         if path.suffix == ".jsonl":
             data = [clean(json.loads(line)) for line in path.read_text().splitlines() if line.strip()]
             contents[path.name] = "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in data)
-        else:
+        elif path.suffix == ".json":
             contents[path.name] = json.dumps(clean(json.loads(path.read_text())), ensure_ascii=False, indent=2) + "\n"
+        else:
+            contents[path.name] = path.read_bytes()
     dest = Path(args.destination)
     dest.mkdir(parents=True, exist_ok=False)
     for name, content in contents.items():
-        (dest / name).write_text(content)
+        if isinstance(content, bytes):
+            (dest / name).write_bytes(content)
+        else:
+            (dest / name).write_text(content)
     source_code = sorted(Path("src/qwen_booster").glob("*.py")) + sorted(Path("scripts").glob("*.py"))
     manifest = {"status": args.status, "note": args.note,
                 "artifact_sha256": {name: digest(dest / name) for name in contents},
