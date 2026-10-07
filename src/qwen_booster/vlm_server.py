@@ -29,9 +29,18 @@ def server_argv(path, args):
             "--max-kv-size", str(args.context), "--prefill-step-size", "2048"]
     if args.api_key:
         argv.extend(["--api-key", args.api_key])
+    if getattr(args, "kv_bits", None) is not None:
+        argv.extend(["--kv-bits", str(args.kv_bits)])
+    if getattr(args, "kv_quant_scheme", None):
+        argv.extend(["--kv-quant-scheme", args.kv_quant_scheme])
+    if getattr(args, "quantized_kv_start", None) is not None:
+        argv.extend(["--quantized-kv-start", str(args.quantized_kv_start)])
     if args.draft:
+        kind = getattr(args, "draft_kind", "mtp")
         argv.extend(["--draft-model", str(Path(args.draft).resolve()),
-                     "--draft-kind", "mtp", "--draft-block-size", str(args.block)])
+                     "--draft-kind", kind])
+        if kind == "mtp":
+            argv.extend(["--draft-block-size", str(args.block)])
     return argv
 
 
@@ -49,6 +58,14 @@ def main():
                         help="Concurrent sequences in the continuous batch; extras queue with backpressure")
     parser.add_argument("--api-key",
                         help="Optional bearer token required by inference and management endpoints")
+    parser.add_argument("--kv-bits", type=float,
+                        help="Uniform KV quantization bits (Flash QSA); TurboQuant schemes stay in float for QSA")
+    parser.add_argument("--kv-quant-scheme", choices=("uniform", "turboquant"),
+                        help="KV quantization backend; upstream default applies when omitted")
+    parser.add_argument("--quantized-kv-start", type=int,
+                        help="Token index where KV quantization starts; upstream default when omitted")
+    parser.add_argument("--draft-kind", choices=("mtp", "dflash", "eagle3"), default="mtp",
+                        help="Drafter family for --draft (default: mtp)")
     parser.add_argument("--context", type=int, default=32768)
     parser.add_argument("--memory-mb", type=int, default=64000)
     parser.add_argument("--allocator-cache-mb", type=int, default=2000)
@@ -132,7 +149,7 @@ def main():
     if args.draft:
         import json
         draft_config = json.loads((Path(args.draft) / 'config.json').read_text())
-        if draft_config.get('model_type') != profile.draft_type:
+        if args.draft_kind == 'mtp' and draft_config.get('model_type') != profile.draft_type:
             parser.error(f"this target requires draft model_type={profile.draft_type}")
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["TRANSFORMERS_OFFLINE"] = "1"

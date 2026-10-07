@@ -41,3 +41,25 @@ def test_server_argv_defaults_stay_local_and_single_sequence():
     argv = vlm_server.server_argv('/tmp/model', args)
     assert '--api-key' not in argv
     assert argv[argv.index('--max-num-seqs') + 1] == '1'
+
+
+def test_server_argv_dflash_keeps_checkpoint_block_size():
+    from types import SimpleNamespace
+    args = SimpleNamespace(host='127.0.0.1', port=18081, max_num_seqs=1, context=32768,
+                           api_key=None, draft='/tmp/draft', block=3, draft_kind='dflash',
+                           kv_bits=None, kv_quant_scheme=None, quantized_kv_start=None)
+    argv = vlm_server.server_argv('/tmp/model', args)
+    assert argv[argv.index('--draft-kind') + 1] == 'dflash'
+    assert '--draft-block-size' not in argv
+    assert '--kv-bits' not in argv
+
+
+def test_server_argv_passes_kv_quantization_options():
+    from types import SimpleNamespace
+    args = SimpleNamespace(host='127.0.0.1', port=18081, max_num_seqs=1, context=32768,
+                           api_key=None, draft=None, block=3, draft_kind='mtp',
+                           kv_bits=4.0, kv_quant_scheme='uniform', quantized_kv_start=5000)
+    argv = vlm_server.server_argv('/tmp/model', args)
+    assert argv[argv.index('--kv-bits') + 1] == '4.0'
+    assert argv[argv.index('--kv-quant-scheme') + 1] == 'uniform'
+    assert argv[argv.index('--quantized-kv-start') + 1] == '5000'
