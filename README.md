@@ -507,6 +507,13 @@ PYTHONPATH=src .cache/vlm-env/bin/python -m qwen_booster.vlm_server \
 
 复现实验脚本：`scripts/benchmark_gdn.py` 对比上游内核；`scripts/smoke_api.py` 启动并关闭临时本地服务，测试两种生成模式；`scripts/archive_results.py` 归档这一组固定命名的结果。不要同时运行多个 GPU 性能实验。
 
+## 工程改造：git、vLLM 风格缓存与开源测试集（2026-10-07）
+
+- **版本管理**：源码、测试、脚本和 `benchmarks/` 证据已纳入 git；首次提交为 `14305e5`。`results/` 与 `.cache/` 继续忽略，避免把 294GB 模型和可重生成原始输出放进仓库。每个归档内的 `src/` 冻结快照仍是不可变证据。
+- **vLLM 风格混合缓存**（默认关闭）：`qwen_booster.hybrid_cache` 用块哈希链（`hash(parent, block)`）替代逐 token 前缀扫描，只保存块对齐检查点；循环状态从不截断，命中后最多重放一个块加保留的末 token。`HybridEngine` 通过 `serve --hybrid-cache --hybrid-block-size 256` 启用；磁盘层 `qwen_booster.apfs` 用 APFS `clonefile` 做写时复制备份、safetensors 临时文件加原子改名写入，`serve --cache-disk-dir <dir> --cache-disk-mb <MB>` 启用，`/v1/cache/reset` 会同时清磁盘。当前仅有 CPU 测试（`tests/test_hybrid_cache.py`、`test_apfs_store.py`、`test_hybrid_engine.py`），**尚未做真模型 GPU 与质量验收**，旧 `PrefixStore` 仍是默认路径。
+- **开源测试集**：`grading.py` 新增 `choice`、`numeric`、`contains_all`、`contains_any`、`regex` 判定；`scripts/build_opensource_suite.py` 离线转换本地 RULER 风格 NIAH、LongBench、GSM8K、MMLU 导出为现有 suite 格式（`evaluate_api.py` 直接可用），不下载、不改写原始任务，未通过的数字字段会跳过并计数。**转换成功不等于质量验收**：开源集存在污染、模板与语言差异，长上下文档位仍需按本机 tokenizer 审计实际输入。
+- 新增测试总数：234（原 200 + 缓存 21 + 评分与转换 13）。
+
 ## 参考
 
 - [Strata](https://github.com/Niko1221/Strata)：分阶段优化、状态复用、推测解码和数值回归的方法。
