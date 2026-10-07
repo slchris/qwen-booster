@@ -37,3 +37,40 @@ def test_json_format_rejects_non_json_and_multiple_documents():
     assert grade_json_format('{"x": "NaN"}', rule) is True
     assert grade_json_format('anything', None) is None
     assert grade_json_format('anything', {"kind": "exact_text"}) is None
+
+
+def test_choice_grading_accepts_common_formats():
+    rule = {"kind": "choice", "expected": "B"}
+    for text in ("B", "b", "(B)", "**B**", "The answer is B.", "答案是 B。"):
+        assert grade_answer(text, rule), text
+    assert not grade_answer("A is wrong, so maybe not.", rule)
+    assert not grade_answer("The letter H appears", rule)
+
+
+def test_numeric_grading_prefers_the_marker_and_tolerates_formatting():
+    rule = {"kind": "numeric", "expected": 42}
+    assert grade_answer("reasoning... #### 42", rule)
+    assert grade_answer("#### 42.0", rule)
+    assert grade_answer("total: 42", rule)
+    assert grade_answer("I computed 41 then corrected to 42.", rule)
+    assert not grade_answer("#### 41 (I wrote 42 earlier)", rule)
+    assert grade_answer("no digits here", rule) is False
+
+
+def test_numeric_grading_tolerance_is_explicit():
+    rule = {"kind": "numeric", "expected": 0.5, "tolerance": 0.01}
+    assert grade_answer("0.505", rule)
+    assert not grade_answer("0.52", rule)
+
+
+def test_contains_grading_handles_case_and_lists():
+    rule = {"kind": "contains_all", "expected": ["Paris", "France"]}
+    assert grade_answer("paris is in france", rule)
+    assert not grade_answer("Paris only", rule)
+    other = {"kind": "contains_any", "expected": ["97804441", "30158402"]}
+    assert grade_answer("The identifier is 30158402.", other)
+
+
+def test_regex_grading_search_and_full():
+    assert grade_answer("answer: 1234", {"kind": "regex", "pattern": r"\d{4}"})
+    assert not grade_answer("answer: 12345", {"kind": "regex", "pattern": r"\d{4}", "full": True})

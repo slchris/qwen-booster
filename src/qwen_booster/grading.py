@@ -1,6 +1,36 @@
 """Deterministic answer checks for controlled tasks, separate from broad quality claims."""
 
 import json
+import re
+
+CHOICE_PATTERN = re.compile(r"\b([A-J])\b")
+NUMBER_PATTERN = re.compile(r"[-+]?\d[\d,]*(?:\.\d+)?")
+
+
+def extract_choice(text):
+    """First standalone option letter, the convention used by MCQ benchmarks."""
+    match = CHOICE_PATTERN.search(text.upper())
+    return match.group(1) if match else None
+
+
+def extract_number(text):
+    """Marker value after the last '####' when present, else the final number."""
+    tail = text.rsplit("####", 1)[-1]
+    if tail != text:
+        candidates = NUMBER_PATTERN.findall(tail)
+        if candidates:
+            return _to_float(candidates[0])
+    candidates = NUMBER_PATTERN.findall(text)
+    if not candidates:
+        return None
+    return _to_float(candidates[-1])
+
+
+def _to_float(value):
+    try:
+        return float(value.replace(",", ""))
+    except ValueError:
+        return None
 
 
 def grade_json_format(text, rule):
@@ -46,4 +76,23 @@ def grade_answer(text, rule):
         except (ValueError, TypeError):
             return False
         return _json_equal(decoded, rule["expected"])
+    if kind == "choice":
+        return extract_choice(text) == str(rule["expected"]).strip().upper()
+    if kind == "numeric":
+        value = extract_number(text)
+        if value is None:
+            return False
+        tolerance = float(rule.get("tolerance", 1e-6))
+        return abs(value - float(rule["expected"])) <= tolerance
+    if kind in ("contains_all", "contains_any"):
+        haystack = text if rule.get("case_sensitive") else text.lower()
+        needles = [str(item) for item in rule["expected"]]
+        if not rule.get("case_sensitive"):
+            needles = [item.lower() for item in needles]
+        check = all if kind == "contains_all" else any
+        return check(needle in haystack for needle in needles)
+    if kind == "regex":
+        flags = re.IGNORECASE if rule.get("ignore_case") else 0
+        match = re.fullmatch if rule.get("full") else re.search
+        return match(rule["pattern"], text, flags) is not None
     raise ValueError(f"unknown grading rule: {kind}")
