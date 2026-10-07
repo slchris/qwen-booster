@@ -62,6 +62,11 @@ def _fsync_path(path):
 def _default_save(path, cache):
     from mlx_lm.models.cache import save_prompt_cache
     save_prompt_cache(str(path), cache)
+    # mlx.save_safetensors appends '.safetensors' when the name lacks it;
+    # normalize so the store's atomic rename always sees the real file.
+    appended = Path(str(path) + ".safetensors")
+    if not Path(path).exists() and appended.exists():
+        os.replace(appended, path)
 
 
 def _default_load(path):
@@ -96,11 +101,20 @@ class CheckpointDiskStore:
     def _read_index(self):
         path = self._index_path()
         if not path.is_file():
+            self._index_mtime = None
             return {}
         data = json.loads(path.read_text())
         if data.get("version") != 1 or not isinstance(data.get("entries"), dict):
             raise ValueError("unsupported disk cache index")
+        self._index_mtime = path.stat().st_mtime_ns
         return data["entries"]
+
+    def _refresh_index(self):
+        """Reload when another writer changed the index since our last read."""
+        path = self._index_path()
+        mtime = path.stat().st_mtime_ns if path.is_file() else None
+        if mtime != getattr(self, "_index_mtime", None):
+            self.entries = self._read_index()
 
     def _write_index(self):
         path = self._index_path()
@@ -108,6 +122,7 @@ class CheckpointDiskStore:
         temporary.write_text(json.dumps({"version": 1, "entries": self.entries}))
         _fsync_path(temporary)
         os.replace(temporary, path)
+        self._index_mtime = path.stat().st_mtime_ns
 
     @property
     def nbytes(self):
@@ -124,6 +139,7 @@ class CheckpointDiskStore:
         size = sum(c.nbytes for c in cache) if nbytes is None else nbytes
         key = f"{digest:016x}"
         with self._lock:
+            self._refresh_index()
             if key in self.entries:
                 self.exists += 1
                 self.entries[key]["last_used"] = self._clock()
@@ -143,6 +159,7 @@ class CheckpointDiskStore:
                 os.replace(temporary, self._entry_path(key))
             finally:
                 temporary.unlink(missing_ok=True)
+                Path(str(temporary) + ".safetensors").unlink(missing_ok=True)
             self.entries[key] = {"tokens": tokens_len, "bytes": size,
                                  "last_used": self._clock()}
             self._write_index()
@@ -156,6 +173,7 @@ class CheckpointDiskStore:
     def get(self, digest):
         key = f"{digest:016x}"
         with self._lock:
+            self._refresh_index()
             entry = self.entries.get(key)
             if entry is None or not self._entry_path(key).is_file():
                 self.misses += 1
@@ -169,26 +187,35 @@ class CheckpointDiskStore:
             self.hits += 1
             return cache
 
+    def match(self, tokens, block_size):
+        """Longest persisted boundary digest without loading its tensors."""
+        best = None
+        with self._lock:
+            self._refresh_index()
+            for end, digest in block_chain(tokens, block_size):
+                if end >= len(tokens):
+                    break
+                entry = self.entries.get(f"{digest:016x}")
+                if entry is not None and entry["tokens"] == end:
+                    best = digest
+            if best is None:
+                self.misses += 1
+                return 0, None
+            return self.entries[f"{best:016x}"]["tokens"], best
+
     def find(self, tokens, block_size):
         """Longest persisted block-aligned prefix shorter than tokens.
 
         Chained hashes validate each entry independently, so missing
         intermediate boundaries do not stop an otherwise matching walk.
         """
-        best = None
-        for end, digest in block_chain(tokens, block_size):
-            if end >= len(tokens):
-                break
-            entry = self.entries.get(f"{digest:016x}")
-            if entry is not None and entry["tokens"] == end:
-                best = digest
-        if best is None:
-            self.misses += 1
+        count, digest = self.match(tokens, block_size)
+        if digest is None:
             return 0, None
-        cache = self.get(best)
+        cache = self.get(digest)
         if cache is None:
             return 0, None
-        return self.entries[f"{best:016x}"]["tokens"], cache
+        return count, cache
 
     def snapshot(self, destination):
         """Copy-on-write backup of every checkpoint file and the index."""

@@ -113,3 +113,36 @@ def test_clear_removes_files(tmp_path):
     assert store.stats()["entries"] == 0
     assert not list(store.root.glob("*.safetensors"))
     assert json.loads((store.root / "index.json").read_text())["entries"] == {}
+
+
+def test_default_serializer_normalizes_appended_suffix(tmp_path):
+    import mlx.core as mx
+    from mlx_lm.models.cache import KVCache
+
+    kv = KVCache()
+    kv.offset = 1
+    kv.keys = mx.zeros((1, 2, 1, 4))
+    kv.values = mx.zeros((1, 2, 1, 4))
+    store = CheckpointDiskStore(tmp_path, max_bytes=1_000_000)
+    assert store.put(7, 1, [kv]) is True
+    loaded = store.get(7)
+    assert loaded[0].offset == 1
+    assert not list(tmp_path.glob(".tmp-*"))
+
+
+def test_store_refreshes_index_written_after_construction(tmp_path):
+    first = make_store(tmp_path)
+    second = make_store(tmp_path)
+    put_tokens(first, list(range(4)))
+    assert second.match(list(range(5)), 4)[0] == 4
+    assert second.find(list(range(5)), 4)[0] == 4
+
+
+def test_match_does_not_load_entry_tensors(tmp_path):
+    store = make_store(tmp_path)
+    put_tokens(store, list(range(4)))
+    digest = final_block_hash(list(range(4)), 4)
+    assert store.match(list(range(5)), 4) == (4, digest)
+    assert store.stats()["hits"] == 0
+    assert store.get(digest) is not None
+    assert store.stats()["hits"] == 1

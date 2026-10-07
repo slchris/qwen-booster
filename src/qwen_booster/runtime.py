@@ -181,9 +181,11 @@ class HybridEngine(Engine):
     def _lookup(self, tokens):
         count, cache = self.prefixes.find(tokens)
         if self.disk is not None:
-            disk_count, disk_cache = self.disk.find(tokens, self.block_size)
+            disk_count, digest = self.disk.match(tokens, self.block_size)
             if disk_count > count:
-                count, cache = disk_count, disk_cache
+                disk_cache = self.disk.get(digest)
+                if disk_cache is not None:
+                    count, cache = disk_count, disk_cache
         if cache is not None and not self._offsets_match(cache, count):
             return 0, None
         return count, cache

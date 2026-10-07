@@ -85,10 +85,12 @@ def test_commit_only_accepts_block_aligned_lengths():
 
 def test_disk_checkpoint_survives_a_fresh_engine(tmp_path):
     engine = EngineHarness(FakeModel(), prefill_step_size=3, cache_bytes=1000, block_size=4,
-                        disk_root=tmp_path, disk_bytes=1_000,
-                        disk_save=save, disk_load=load)
+                           disk_root=tmp_path, disk_bytes=1_000,
+                           disk_save=save, disk_load=load)
     engine.prepare(list(range(9)))
     assert engine.disk.stats()["entries"] == 1
+    engine.prepare(list(range(10)))
+    assert engine.disk.stats()["hits"] == 0
     fresh = EngineHarness(FakeModel(), prefill_step_size=3, cache_bytes=1000, block_size=4,
                        disk_root=tmp_path, disk_bytes=1_000,
                        disk_save=save, disk_load=load)
