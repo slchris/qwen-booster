@@ -510,9 +510,11 @@ PYTHONPATH=src .cache/vlm-env/bin/python -m qwen_booster.vlm_server \
 ## 工程改造：git、vLLM 风格缓存与开源测试集（2026-10-07）
 
 - **版本管理**：源码、测试、脚本和 `benchmarks/` 证据已纳入 git；首次提交为 `14305e5`。`results/` 与 `.cache/` 继续忽略，避免把 294GB 模型和可重生成原始输出放进仓库。每个归档内的 `src/` 冻结快照仍是不可变证据。
-- **vLLM 风格混合缓存**（默认关闭）：`qwen_booster.hybrid_cache` 用块哈希链（`hash(parent, block)`）替代逐 token 前缀扫描，只保存块对齐检查点；循环状态从不截断，命中后最多重放一个块加保留的末 token。`HybridEngine` 通过 `serve --hybrid-cache --hybrid-block-size 256` 启用；磁盘层 `qwen_booster.apfs` 用 APFS `clonefile` 做写时复制备份、safetensors 临时文件加原子改名写入，`serve --cache-disk-dir <dir> --cache-disk-mb <MB>` 启用，`/v1/cache/reset` 会同时清磁盘。当前仅有 CPU 测试（`tests/test_hybrid_cache.py`、`test_apfs_store.py`、`test_hybrid_engine.py`），**尚未做真模型 GPU 与质量验收**，旧 `PrefixStore` 仍是默认路径。
+- **vLLM 风格混合缓存**（默认关闭）：`qwen_booster.hybrid_cache` 用块哈希链（`hash(parent, block)`）替代逐 token 前缀扫描，只保存块对齐检查点；循环状态从不截断，命中后最多重放一个块加保留的末 token。`HybridEngine` 通过 `serve --hybrid-cache --hybrid-block-size 256` 启用；磁盘层 `qwen_booster.apfs` 用 APFS `clonefile` 做写时复制备份、safetensors 临时文件加原子改名写入，`serve --cache-disk-dir <dir> --cache-disk-mb <MB>` 启用，`/v1/cache/reset` 会同时清磁盘。旧 `PrefixStore` 仍是默认路径。
+- **混合缓存真机验证已完成有界检查**：M3 Max 128GB、Qwen3.8-27B MLX 4-bit 快照 `10c35caa…`、8193-token 合成提示、greedy 8 tokens。冷 prefill 39.1 秒；同提示热命中边界 8192、prepare 0.001 秒、输出逐 token 一致；仅末 token 变化和追加 8 token 的提示同样命中 8192；无复用冷对照输出一致；同进程磁盘恢复 0.006 秒、新进程恢复 0.004 秒，输出一致。HTTP 端到端（6020 tokens）：冷请求 27.5 秒、热请求命中 5888 并重放 132 tokens、总 prepare 0.83 秒、正文一致。归档见 [hybrid-cache-native-v1](benchmarks/hybrid-cache-native-v1/manifest.json)。这只验证缓存机制，**不是吞吐、质量或日常使用验收**，也没有覆盖 200K 档位。
+- **观测与结果查看（Langfuse 评估）**：本项目为本地优先、单请求实验服务，验收依赖逐字节 JSONL/manifest 与冷/热对照；而 Langfuse v4 自托管需要 Web+Worker、PostgreSQL、Redis、ClickHouse、S3 五件套，云端版会把提示与回答传出本机，且它不采集 MLX 峰值内存、缓存准入、块命中这类决定验收的字段。因此**暂不引入 Langfuse**。替代方案是新增零依赖离线报告器 `scripts/render_report.py <results.jsonl> --output report.html`，把测量 JSONL 渲染成带数值条的静态 HTML；原始 JSONL 仍是唯一事实来源。若后续服务变为多用户/多并发，再考虑 OpenTelemetry（上游 mlx-vlm 目前没有 tracing 钩子）或自托管 Langfuse。
 - **开源测试集**：`grading.py` 新增 `choice`、`numeric`、`contains_all`、`contains_any`、`regex` 判定；`scripts/build_opensource_suite.py` 离线转换本地 RULER 风格 NIAH、LongBench、GSM8K、MMLU 导出为现有 suite 格式（`evaluate_api.py` 直接可用），不下载、不改写原始任务，未通过的数字字段会跳过并计数。**转换成功不等于质量验收**：开源集存在污染、模板与语言差异，长上下文档位仍需按本机 tokenizer 审计实际输入。
-- 新增测试总数：234（原 200 + 缓存 21 + 评分与转换 13）。
+- 新增测试总数：240（原 200 + 缓存与归档 28 + 评分、转换与报告 12）。
 
 ## 参考
 
