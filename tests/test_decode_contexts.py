@@ -46,3 +46,15 @@ def test_summarize_groups_prime_and_decode_rows():
     assert summary["cached_tokens"] == 32769
     assert summary["decode_tps_median"] == 16.0
     assert summary["texts_identical"] is True
+
+
+def test_summarize_without_prime_reports_none():
+    rows = [
+        {"phase": "decode", "target": 32768, "seconds": 3.0, "ttft_seconds": 0.4,
+         "decode_tps": 19.0, "text_sha256": "b",
+         "usage": {"prompt_tokens_details": {"cached_tokens": 32779}}},
+    ]
+    summary = module.summarize(rows)["32768"]
+    assert summary["prime_seconds"] is None
+    assert summary["cached_tokens"] == 32779
+    assert summary["decode_tps_median"] == 19.0

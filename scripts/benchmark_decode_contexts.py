@@ -124,6 +124,8 @@ def main():
     parser.add_argument("--repeats", type=int, default=2)
     parser.add_argument("--timeout", type=float, default=7200)
     parser.add_argument("--api-key")
+    parser.add_argument("--skip-prime", action="store_true",
+                        help="Restore-only: skip cold primes and expect cache hits")
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
     if any(length < 1024 for length in args.lengths) or args.tokens < 2 or args.repeats < 1:
@@ -137,11 +139,12 @@ def main():
         base = {"model": args.model, "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0, "enable_thinking": False, "stream": True,
                 "stream_options": {"include_usage": True}}
-        prime = stream_request(args.endpoint, {**base, "max_tokens": 8}, args.timeout, args.api_key)
-        rows.append({"type": "measurement", "phase": "prime", "target": target,
-                     "repeat": 0, **prime})
-        print(f"target~{target} prime: {prime['seconds']:.1f}s "
-              f"prompt={((prime.get('usage') or {}).get('prompt_tokens'))}", flush=True)
+        if not args.skip_prime:
+            prime = stream_request(args.endpoint, {**base, "max_tokens": 8}, args.timeout, args.api_key)
+            rows.append({"type": "measurement", "phase": "prime", "target": target,
+                         "repeat": 0, **prime})
+            print(f"target~{target} prime: {prime['seconds']:.1f}s "
+                  f"prompt={((prime.get('usage') or {}).get('prompt_tokens'))}", flush=True)
         for repeat in range(args.repeats):
             result = stream_request(args.endpoint, {**base, "max_tokens": args.tokens},
                                     args.timeout, args.api_key)

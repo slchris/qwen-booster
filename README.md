@@ -552,9 +552,10 @@ PYTHONPATH=src .cache/vlm-env/bin/python -m qwen_booster.vlm_server \
 1. **30 tok/s 单流目标**：当前上游软件下只有 ~32K 上下文最接近（24–25）；100K 为 19，200K 约 13。要把 100K/200K 做到 30 需要内核/编译级优化，现成开关里没有；不要把短上下文收益外推到长上下文。
 2. **DFlash2 证明外部高接受率草稿是有效杠杆**（27B +77%，且输出无损），但 27B 绝对值仍低于 Flash；若出现 Flash-Next 版 DFlash/EAGLE 草稿，值得优先测试。
 3. **KV 量化对 Flash 被封死**（上游 QSA×连续批处理限制）；27B 的 KV 量化未测，理论上是长上下文 decode 的候选。
-4. **200K 交互仍不可用**：纯上游与 borrow+credit 组合都未能热命中（cached=0，TTFT ~505 秒），且补丁组合下 prime 反而从 282 秒升到 570 秒；需要磁盘回退（RAM 保存被拒后同步落盘、下次恢复约 15 秒）或继续修准入。**建议交互上下文控制在 ≤32K（检索/分块），200K 走磁盘回退 + 会话钉住**。
-5. **并发**：连续批处理把 4 路聚合推到约 40 tokens/s（单路 15）；总吞吐够一个小团队，但单路 30 需要上面的单流优化。
-6. 已落地的开关：`vlm_server --draft-kind dflash|eagle3|mtp`（dflash 使用草稿自带 block 配置）、`--kv-bits/--kv-quant-scheme/--quantized-kv-start`；默认全部关闭。基准脚本 `scripts/benchmark_decode_contexts.py` 可复现本表。
+4. **200K 已找到可用配方（有限验证）**：纯上游与 borrow+credit 组合（无磁盘）都不能热命中（cached=0，TTFT ~505–617 秒）。按已归档的磁盘回退配方（MTP block 3 + `--release-finished-mtp --borrow-flash-mtp-checkpoint-row --credit-flash-mtp-live-warm-cache --recheck-flash-mtp-cache-admission --recheck-flash-mtp-cache-restore`，env `APC_CHECKPOINT_ENTRIES=4 APC_MEMORY_RESERVE_GB=3.725290298461914 APC_CHECKPOINT_INTERVAL_TOKENS=0`，`--cache-mb 24000 --memory-mb 110000 --disk-cache-dir <dir> --disk-cache-mb 48000`）实测：204812-token 文档首触 750.6 秒（12.5 分钟）并把 5.96GB 检查点落盘；紧接着 0.5 秒内的第一个追问仍会错过一次（MTP 释放后的恢复准入竞态，全量重算 617 秒），之后 TTFT 4.9 秒、decode 12.1 tok/s；新进程空内存启动时首个请求 36.7 秒从磁盘恢复 204811 tokens，第二个请求 TTFT 2.0 秒、decode 10.4 tok/s，输出全程逐 token 一致。**因此 200K 的工作模式是：每个文档首次约 12.5 分钟，之后追问 2–5 秒首 token、约 11 tokens/s，重启恢复 40 秒内**。归档见 [flash-200k-disk-spill-accept-v1](benchmarks/flash-200k-disk-spill-accept-v1/manifest.json)。注意：MTP 解码略慢于非 MTP 基线（11–12 vs 12.5–13.4）但当前只有这条保留路径验证过；agent 客户端在冷请求后应间隔数秒再发首个追问（竞态修复未做）。
+5. **交互上下文建议**：常规 chat 控制在 ≤32K（24 tok/s）；100K 热命中约 19 tok/s、可直接用；200K 按上面配方作为"分析会话"使用，并使用检索/分块尽量减少长上下文请求。
+6. **并发**：连续批处理把 4 路聚合推到约 40 tokens/s（单路 15）；总吞吐够一个小团队，但单路 30 需要上面的单流优化。
+7. 已落地的开关：`vlm_server --draft-kind dflash|eagle3|mtp`（dflash 使用草稿自带 block 配置）、`--kv-bits/--kv-quant-scheme/--quantized-kv-start`；默认全部关闭。基准脚本 `scripts/benchmark_decode_contexts.py`（含 `--skip-prime` 恢复模式）可复现本表。
 
 ## 参考
 
