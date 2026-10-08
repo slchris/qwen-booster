@@ -4,7 +4,8 @@ from types import SimpleNamespace
 import pytest
 
 from qwen_booster.admission_recheck import patch_admission_recheck
-from qwen_booster.restore_admission import patch_restore_recheck, restore_recheck
+from qwen_booster.restore_admission import (patch_restore_recheck, restore_recheck,
+                                            restore_recheck_settled)
 
 
 @pytest.mark.parametrize('prefill,headrooms,expected', [
@@ -53,12 +54,12 @@ def test_changed_budget_or_expired_deadline_never_admits(change):
 
 @pytest.mark.parametrize('evicted,original,allocation,retain,retries', [
     (True, False, 30, 0, 1),
-    (False, False, 30, 0, 0),
+    (False, False, 30, 0, 1),
     (True, True, 30, 0, 0),
     (True, False, 0, 0, 0),
     (True, False, 30, 30, 0),
 ])
-def test_only_rejected_restore_after_actual_eviction_retries(
+def test_any_rejected_restore_in_lookup_scope_retries(
         evicted, original, allocation, retain, retries):
     calls = []
 
@@ -129,3 +130,31 @@ def test_store_restore_scopes_compose_and_reset_after_exception(restore_first):
     assert not manager._make_room(60)
     assert not manager._make_room(30, retain_bytes=30)
     assert calls == ['store', 'restore']
+
+
+def test_settled_recheck_nudges_and_waits_up_to_two_seconds():
+    now, values = [0.0], iter([30, 30, 99])
+    manager = SimpleNamespace(
+        lock=RLock(), memory_max_bytes=100, memory_reserve_bytes=10,
+        _prefill_reserve_bytes=20, _resident_bytes_locked=lambda: 40,
+        _memory_headroom=lambda: next(values))
+
+    def sleep(delay):
+        now[0] += delay
+
+    assert restore_recheck_settled(manager, 30, clock=lambda: now[0], sleep=sleep)
+    assert 0 < now[0] <= 2.0
+
+
+def test_settled_recheck_fails_fast_when_capacity_is_exceeded():
+    now = [0.0]
+    manager = SimpleNamespace(
+        lock=RLock(), memory_max_bytes=100, memory_reserve_bytes=10,
+        _prefill_reserve_bytes=20, _resident_bytes_locked=lambda: 101,
+        _memory_headroom=lambda: 999)
+
+    def sleep(delay):
+        now[0] += delay
+
+    assert not restore_recheck_settled(manager, 30, clock=lambda: now[0], sleep=sleep)
+    assert now[0] <= 0.1

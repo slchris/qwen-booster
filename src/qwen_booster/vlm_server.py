@@ -94,7 +94,8 @@ def main():
     parser.add_argument("--recheck-flash-mtp-cache-admission", action="store_true",
                         help="Experimental Flash MTP post-eviction admission recheck; requires live-cache credit")
     parser.add_argument("--recheck-flash-mtp-cache-restore", action="store_true",
-                        help="Experimental Flash MTP post-eviction restore recheck; requires store recheck")
+                        help="Experimental Flash MTP restore recheck after any lookup admission miss "
+                             "(MLX reclaim nudge + up to 2 s polling); requires store recheck")
     parser.add_argument("--borrow-27b-checkpoint-row", action="store_true",
                         help="Experimental 27B singleton deferred checkpoint row copy")
     parser.add_argument("--credit-27b-live-warm-cache", action="store_true",
