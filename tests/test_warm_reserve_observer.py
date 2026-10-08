@@ -5,7 +5,7 @@ import pytest
 
 
 def test_observer_preserves_calls_and_clears_context_after_error():
-    spec = importlib.util.spec_from_file_location('warm_observer', Path(__file__).parents[1] / 'scripts/trace_warm_reserve_server.py')
+    spec = importlib.util.spec_from_file_location('warm_observer', Path(__file__).parents[1] / 'scripts/experiments/trace_warm_reserve_server.py')
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     calls, observations = [], []

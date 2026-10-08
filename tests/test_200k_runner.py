@@ -9,7 +9,7 @@ import pytest
 def test_quality_failure_is_retained_and_final_replay_uses_identical_history(tmp_path, monkeypatch):
     scripts = Path(__file__).parents[1] / 'scripts'
     monkeypatch.syspath_prepend(str(scripts))
-    spec = importlib.util.spec_from_file_location('large_runner', scripts / 'evaluate_200k.py')
+    spec = importlib.util.spec_from_file_location('large_runner', scripts / 'experiments' / 'evaluate_200k.py')
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     fixture = {'id': 'large', 'fact_position_fraction': 0.95, 'prompt_tokens': 204801,

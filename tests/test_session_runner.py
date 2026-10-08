@@ -9,7 +9,7 @@ import pytest
 def test_sampled_cold_checks_are_not_reported_as_full_parity(tmp_path, monkeypatch, backend, key):
     scripts = Path(__file__).parents[1] / "scripts"
     monkeypatch.syspath_prepend(str(scripts))
-    spec = importlib.util.spec_from_file_location("session_runner", scripts / "evaluate_sessions.py")
+    spec = importlib.util.spec_from_file_location("session_runner", scripts / "experiments" / "evaluate_sessions.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     calls = []
@@ -42,7 +42,7 @@ def test_sampled_cold_checks_are_not_reported_as_full_parity(tmp_path, monkeypat
 def test_session_gate_rejects_false_parity(tmp_path, monkeypatch, fault):
     scripts = Path(__file__).parents[1] / "scripts"
     monkeypatch.syspath_prepend(str(scripts))
-    spec = importlib.util.spec_from_file_location("session_runner", scripts / "evaluate_sessions.py")
+    spec = importlib.util.spec_from_file_location("session_runner", scripts / "experiments" / "evaluate_sessions.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     calls = 0

@@ -7,7 +7,7 @@ import pytest
 
 def test_snapshot_observer_preserves_results_errors_and_scope():
     spec = importlib.util.spec_from_file_location(
-        'snapshot_observer', Path(__file__).parents[1] / 'scripts/trace_snapshot_server.py')
+        'snapshot_observer', Path(__file__).parents[1] / 'scripts/experiments/trace_snapshot_server.py')
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     phases, calls = [], []

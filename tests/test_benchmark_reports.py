@@ -3,7 +3,11 @@ from pathlib import Path
 
 
 def script(name):
-    spec = importlib.util.spec_from_file_location(name, Path(__file__).parents[1] / "scripts" / f"{name}.py")
+    root = Path(__file__).parents[1] / "scripts"
+    path = root / "experiments" / f"{name}.py"
+    if not path.is_file():
+        path = root / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
