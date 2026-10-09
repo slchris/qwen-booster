@@ -5,6 +5,13 @@
 Initial public-ready snapshot. Everything below is bounded by the evidence in
 `benchmarks/`; read those manifests before drawing conclusions.
 
+### Distribution
+
+- `benchmarks/` evidence is no longer tracked in the source repository. Release
+  bundles are built deterministically with `scripts/pack_evidence.py` and
+  documented in `docs/EVIDENCE.md` (download, verify, local rebuild, local
+  scoring).
+
 ### Added
 
 - Block-aligned hybrid prefix cache (`qwen_booster.hybrid_cache`) following

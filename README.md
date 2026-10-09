@@ -9,7 +9,7 @@ frozen, hashed archive under [`benchmarks/`](benchmarks/), and failed
 experiments are kept on purpose.
 
 [中文说明](README.zh-CN.md) · [Experiment log (中文，完整历史)](docs/EXPERIMENTS.zh-CN.md) ·
-[Serving runbook](docs/SERVING.md)
+[Serving runbook](docs/SERVING.md) · [Evidence downloads](docs/EVIDENCE.md)
 
 ---
 
@@ -110,10 +110,12 @@ docs/               serving runbook, full experiment log, release checklist
 
 ## Evidence
 
-`benchmarks/<name>/manifest.json` records status, notes, artifact hashes and
-archive-time source hashes. Raw JSONL, server logs and (for older archives) a
-frozen `src/` snapshot are stored next to it. Read the manifest of an
-experiment before citing its numbers.
+Evidence archives are distributed separately from the source repository
+(~200 MB of raw outputs, logs and manifests). Download the release bundle and
+extract it at the repository root — see [docs/EVIDENCE.md](docs/EVIDENCE.md).
+Links to `benchmarks/...` in these docs resolve after extraction. Each
+`manifest.json` records status, notes, artifact hashes and archive-time
+source hashes; read it before citing numbers.
 
 ## Known gaps
 

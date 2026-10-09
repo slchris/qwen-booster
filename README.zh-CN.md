@@ -7,7 +7,7 @@
 失败实验刻意保留。
 
 [English](README.md) · [完整实验日志（中文）](docs/EXPERIMENTS.zh-CN.md) ·
-[内网部署手册](docs/SERVING.md)
+[内网部署手册](docs/SERVING.md) · [证据下载](docs/EVIDENCE.md)
 
 ---
 
@@ -97,8 +97,10 @@ docs/               部署手册、完整实验日志、发布检查单
 
 ## 证据
 
-`benchmarks/<name>/manifest.json` 记录状态、说明、产物哈希与归档时源码哈希；
-旁边是原始 JSONL、服务日志（旧归档含冻结 `src/` 快照）。引用数字前先读 manifest。
+证据目录不随源码仓库发布（约 200MB 原始输出、日志与 manifest）。**下载 Release 附件
+并在仓库根目录解压**即可恢复 `benchmarks/`，见 [docs/EVIDENCE.md](docs/EVIDENCE.md)；
+解压后本文档中的 `benchmarks/...` 链接才有效。每份 `manifest.json` 记录状态、说明、
+产物哈希与归档时源码哈希；引用数字前先读 manifest。
 
 ## 已知缺口
 

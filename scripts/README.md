@@ -22,6 +22,7 @@ in `scripts/experiments/` and assume the maintainer's machine.
 | Script | Purpose |
 | --- | --- |
 | `archive_run.py` / `archive_results.py` | Hash and freeze a run into `benchmarks/` |
+| `pack_evidence.py` | Deterministic, checksummed evidence bundle for releases |
 | `build_*_suite.py` | Synthetic suite builders used by archived experiments |
 | `audit_model_weights.py` / `audit_workload_tokens.py` | Weight and tokenizer audits |
 | `summarize_*.py` | Review summaries for archived runs |
